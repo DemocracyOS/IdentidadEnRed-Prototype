@@ -1,6 +1,6 @@
 # Identidad En Red
 
-DemocraciaEnRed is an online space for deliberation and voting on political proposals. The software aims to stimulate better arguments and come to better rulings.
+IdentidadEnRed is an online identity authentication system based on computing an identity score for each user.
 
 ## License 
 
