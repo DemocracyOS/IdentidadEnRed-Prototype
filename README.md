@@ -1,7 +1,7 @@
 # Identidad En Red
 
 IdentidadEnRed is an online identity authentication system based on computing an identity score for each user.
-
+Test app deployed at: http://identidad-en-red.appspot.com/
 ## License 
 
 (The MIT License)

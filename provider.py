@@ -55,7 +55,6 @@ import urlparse
 import webapp2, jinja2
 
 from google.appengine.api import datastore
-from google.appengine.api import users
 from google.appengine.ext.webapp import template
 from hashlib import md5
 
