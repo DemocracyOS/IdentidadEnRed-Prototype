@@ -1,0 +1,20 @@
+application: identidad-en-red
+runtime: python27
+version: 1
+api_version: 1
+threadsafe: yes
+
+handlers:
+- url: /static
+  static_dir: static
+
+- url: .*
+  script: provider.app
+  
+
+libraries:
+- name: webapp2
+  version: "2.5.1"
+
+- name: jinja2
+  version: latest
