@@ -644,6 +644,6 @@ app = webapp2.WSGIApplication([
     webapp2.Route('/login', FinishLogin),
     webapp2.Route('/xrds', XRDS),
     webapp2.Route('/frontend', FrontPage),
-    webapp2.Route('/[^/]*', UserXRDS),
+    ('/[^/]*', UserXRDS),
 ], debug=True, config=config)
 
