@@ -126,6 +126,6 @@ class DatastoreStore(OpenIDStore):
     time it is called. The key returned should be C{L{AUTH_KEY_LEN}} bytes
     long.
     """
-    auth_key = 'My Insecure Auth Key'
+    auth_key = 'Que despierte la Red'
     assert len(auth_key) == self.AUTH_KEY_LEN
     return auth_key

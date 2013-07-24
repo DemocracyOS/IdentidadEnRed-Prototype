@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8"/>
+    <title>{% block title %}Identidad en Red{% endblock %}</title>
+    <style>
+      input {
+        display: block;
+      }
+    </style>
+  </head>
+
+  <body>
+
+  <div class="content">
+    {% block maincontent %}
+
+    {% endblock %}
+  </div>
+
+  <div>
+    <footer>
+      <hr/>
+      <p>
+        {% if not user %}
+          <a href="/pre_login">Login</a>
+        {% else %}
+          Logged in as <strong>{{ user.name }}</strong> | <a href="/pre_logout">Logout</a>
+        {% endif %}
+        |
+        <a href="/">Home</a>
+        |
+        <a href="/signup">New user</a>
+        |
+        <a href="/authenticated">Secured page</a> (you can see this after login)
+      </p>
+    </footer>
+  </div>
+
+
+  </body>
+</html>

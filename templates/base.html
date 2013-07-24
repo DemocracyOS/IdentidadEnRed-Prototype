@@ -4,10 +4,9 @@
 <html xmlns="http://www.w3.org/1999/xhtml">
 <head>
   <meta http-equiv="content-type" content="text/html; charset=utf-8"/>
-  <title>{% block title %} OpenID for Google Accounts {% endblock %}</title>
+  <title>{% block title %} Identidad En Red {% endblock %}</title>
   <link rel="openid2.provider" href="{{ request_url_without_params }}" />
   <link rel="openid.server" href="{{ request_url_without_params }}" />
-  <link href="/static/base.css" rel="stylesheet" type="text/css"/>
   {% block head %}{% endblock %}
 </head>
 
@@ -23,18 +22,14 @@
   {% else %}
     <a href="{{ login_url|escape }}">Log in</a>
   {% endif %}
-  | <a href="http://code.google.com/appengine/">Google App Engine</a>
-  | <a href="http://code.google.com/p/appengine-openid-provider/">
-      Download source</a>
 </div>
 
 <div id="header">
-  <img id ="openid-logo" alt="OpenID" src="/static/openid-logo.png" />
-  <p id="title">for
+  <p id="title">OpenID para
   {% if user %}
-    {{ user.nickname }}'s Google Account
+    {{ user.nickname }}
   {% else %}
-    Google Accounts
+    identidades en Red
   {% endif %}
   </p>
 </div>

@@ -1,65 +1,34 @@
 #!/usr/bin/python
-#
-# Copyright 2006 Google Inc.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#      http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
 
-"""
-An OpenID Provider. Allows Google users to log into OpenID servers using
-their Google Account.
-
-Part of http://code.google.com/p/google-app-engine-samples/.
-
-For more about OpenID, see:
-  http://openid.net/
-  http://openid.net/about.bml
-
-Uses JanRain's Python OpenID library, version 1.2.0, licensed under the
-Apache Software License 2.0:
-  http://openidenabled.com/python-openid/
-
-It uses version 1.2.0 (included here), not a later version, because this app
-was originally written a long time ago when 1.2.0 was the latest version
-available. Porting to 2.1.1 or later should be straightforward.
-
-The JanRain library includes a reference OpenID consumer that can be used to
-test this provider. After starting the dev_appserver with this app, unpack the
-JanRain library and run these commands from its root directory:
-
-  setenv PYTHONPATH .
-  python ./examples/consumer.py -s localhost
-
-Then go to http://localhost:8001/ in your browser, type in
-http://localhost:8080/myname as your openid identifier, and click Verify.
-"""
 
 import Cookie
 import datetime
 import logging
 import os
+import os.path
 import pprint
 import sys
 import traceback
 import urlparse
+import logging
 
 import webapp2, jinja2
 
+
+from webapp2_extras import auth
+from webapp2_extras import sessions
+from webapp2_extras.auth import InvalidAuthIdError
+from webapp2_extras.auth import InvalidPasswordError
+
+from google.appengine.ext.webapp import template
+from google.appengine.ext import ndb
 from google.appengine.api import datastore
 from google.appengine.ext.webapp import template
 from hashlib import md5
 
 from openid.server import server as OpenIDServer
 import store
+import users
 
 
 # the global openid server instance
@@ -69,13 +38,6 @@ def digest(x):
   m = md5()
   m.update(x)
   return m.hexdigest()
-
-def get_op_endpoint(request):
-    parsed = urlparse.urlparse(request.uri)
-    request_url_without_path = parsed[0] + '://' + parsed[1]
-    request_url_without_params = request_url_without_path + parsed[2]
-#    return request_url_without_params
-    return request_url_without_path + '/server'
 
 def get_identity_url(request):
     user = users.get_current_user()
@@ -95,29 +57,14 @@ def InitializeOpenId():
     logging.info('op_endpoint: %s', op_endpoint)
     oidserver = OpenIDServer.Server(store.DatastoreStore(), op_endpoint=op_endpoint)
   
-class Handler(webapp2.RequestHandler):
+class OpenIDRequestHandler(webapp2.RequestHandler):
   """A base handler class with a couple OpenID-specific utilities."""
 
   def ArgsToDict(self):
-    """Converts the URL and POST parameters to a singly-valued dictionary.
-
-    Returns:
-      dict with the URL and POST body parameters
-    """
     req = self.request
     return dict([(arg, req.get(arg)) for arg in req.arguments()])
 
   def HasCookie(self, trust_root):
-    """Returns True if we "remember" the user, False otherwise.
-
-    Determines whether the user has used OpenID before and asked us to
-    remember them - ie, if the user agent provided an 'openid_remembered'
-    cookie.
-
-    Returns:
-      True if we remember the user, False otherwise.
-    """
-    
     cookies = os.environ.get('HTTP_COOKIE', None)
     if cookies:
       morsel = Cookie.BaseCookie(cookies).get('openid_remembered_%s' % digest(trust_root))
@@ -127,15 +74,6 @@ class Handler(webapp2.RequestHandler):
     return False
 
   def GetOpenIdRequest(self):
-    """Creates and OpenIDRequest for this request, if appropriate.
-
-    If this request is not an OpenID request, returns None. If an error occurs
-    while parsing the arguments, returns False and shows the error page.
-
-    Return:
-      An OpenIDRequest, if this user request is an OpenID request. Otherwise
-      False.
-    """
     try:
       oidrequest = oidserver.decodeRequest(self.ArgsToDict())
       logging.debug('OpenID request: %s' % oidrequest)
@@ -146,12 +84,6 @@ class Handler(webapp2.RequestHandler):
       return False
 
   def Respond(self, oidresponse):
-    """Send an OpenID response.
-
-    Args:
-      oidresponse: OpenIDResponse
-      The response to send, usually created by OpenIDRequest.answer().
-    """
     logging.warning('Respond: oidresponse.request.mode ' + oidresponse.request.mode)
 
     if oidresponse.request.mode in ['checkid_immediate', 'checkid_setup']:
@@ -165,16 +97,9 @@ class Handler(webapp2.RequestHandler):
                        'email':user.email()}
           sreg_resp = SRegResponse.extractResponse(sreg_req, user_data)
           sreg_resp.toMessage(oidresponse.fields)        
-        # add nickname, using the Simple Registration Extension:
-        # http://www.openidenabled.com/openid/simple-registration-extension/
-# mrk
-#        oidresponse.fields.setArg('http://openid.net/sreg/1.0', 'nickname', user.nickname())
-#        oidresponse.fields.setArg('http://openid.net/sreg/1.0', 'email', user.email())
-        pass
     logging.info('Using response: %s' % oidresponse)
     encoded_response = oidserver.encodeResponse(oidresponse)
 
-    # update() would be nice, but wsgiref.headers.Headers doesn't implement it
     for header, value in encoded_response.headers.items():
       self.response.headers[header] = str(value)
 
@@ -190,15 +115,6 @@ class Handler(webapp2.RequestHandler):
       self.response.out.write('')
 
   def Render(self, template_name, extra_values={}):
-    """Render the given template, including the extra (optional) values.
-
-    Args:
-      template_name: string
-      The template to render.
-
-      extra_values: dict
-      Template values to provide to the template.
-    """
     parsed = urlparse.urlparse(self.request.uri)
     request_url_without_path = parsed[0] + '://' + parsed[1]
     request_url_without_params = request_url_without_path + parsed[2]
@@ -212,6 +128,7 @@ class Handler(webapp2.RequestHandler):
       'request_url_without_params': request_url_without_params,
       'user': users.get_current_user(),
       'login_url': users.create_login_url(self.request.uri),
+      'register_url':  'signup',
       'logout_url': users.create_logout_url('/'),
       'debug': self.request.get('deb'),
     }
@@ -249,7 +166,7 @@ class Handler(webapp2.RequestHandler):
     login['relying_party'] = oidrequest.trust_root
     login['time'] = datetime.datetime.now()
     login['kind'] = kind
-    login['user'] = user
+    login['user'] = user.id()
     datastore.Put(login)
 
   def CheckUser(self):
@@ -296,7 +213,7 @@ class Handler(webapp2.RequestHandler):
     front_page.get()
 
 
-class XRDS(Handler):
+class XRDS(OpenIDRequestHandler):
   def get(self):
     global oidserver
     self.response.headers['Content-Type'] = 'application/xrds+xml'
@@ -313,7 +230,7 @@ class XRDS(Handler):
 </XRD>
 </xrds:XRDS>""" % {'op_endpoint':oidserver.op_endpoint})
 
-class UserXRDS(Handler):
+class UserXRDS(OpenIDRequestHandler):
   def get(self):
     global oidserver
     self.response.headers['Content-Type'] = 'application/xrds+xml'
@@ -328,7 +245,7 @@ class UserXRDS(Handler):
 </XRD>
 </xrds:XRDS>""" % {'op_endpoint':oidserver.op_endpoint})
 
-class FrontPage(Handler):
+class FrontPage(OpenIDRequestHandler):
   """Show the default OpenID page, with the last 10 logins for this user."""
   def get(self):
     logins = []
@@ -336,20 +253,19 @@ class FrontPage(Handler):
     user = users.get_current_user()
     if user:
       query = datastore.Query('Login')
-      query['user ='] = user
+      query['user ='] = user.id()
       query.Order(('time', datastore.Query.DESCENDING))
       logins = query.Get(10)
 
-    self.Render('index', vars())
+    self.Render('index', {"logins": logins, "user": user})
 
 
-class Login(Handler):
+class OpenIDServerHandler(OpenIDRequestHandler):
   """Handles OpenID requests: associate, checkid_setup, checkid_immediate."""
 
   def get(self):
     """Handles GET requests."""
     login_url = users.create_login_url(self.request.uri)
-    logout_url = users.create_logout_url(self.request.uri)
     user = users.get_current_user()
     if user:
       logging.debug('User: %s' % user)
@@ -390,14 +306,8 @@ class Login(Handler):
 
   post = get
 
-  def prompt(self):
-    """Ask the user to confirm an OpenID login request."""
-    oidrequest = self.GetOpenIdRequest()
-    if oidrequest:
-      self.response.out.write(page)
 
-
-class FinishLogin(Handler):
+class FinishLogin(OpenIDRequestHandler):
   """Handle a POST response to the OpenID login prompt form."""
   def post(self):
     if not self.CheckUser():
@@ -442,12 +352,298 @@ class FinishLogin(Handler):
       self.ReportError('Bad login request.')
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+def user_required(handler):
+  """
+    Decorator that checks if there's a user associated with the current session.
+    Will also fail if there's no session present.
+  """
+  def check_login(self, *args, **kwargs):
+    auth = self.auth
+    if not auth.get_user_by_session():
+      self.redirect(self.uri_for('login'), abort=True)
+    else:
+      return handler(self, *args, **kwargs)
+
+  return check_login
+
+class BaseHandler(webapp2.RequestHandler):
+  @webapp2.cached_property
+  def auth(self):
+    """Shortcut to access the auth instance as a property."""
+    return auth.get_auth()
+
+  @webapp2.cached_property
+  def user_info(self):
+    """Shortcut to access a subset of the user attributes that are stored
+    in the session.
+
+    The list of attributes to store in the session is specified in
+      config['webapp2_extras.auth']['user_attributes'].
+    :returns
+      A dictionary with most user information
+    """
+    return self.auth.get_user_by_session()
+
+  @webapp2.cached_property
+  def user(self):
+    """Shortcut to access the current logged in user.
+
+    Unlike user_info, it fetches information from the persistence layer and
+    returns an instance of the underlying model.
+
+    :returns
+      The instance of the user model associated to the logged in user.
+    """
+    u = self.user_info
+    return self.user_model.get_by_id(u['user_id']) if u else None
+
+  @webapp2.cached_property
+  def user_model(self):
+    """Returns the implementation of the user model.
+
+    It is consistent with config['webapp2_extras.auth']['user_model'], if set.
+    """    
+    return self.auth.store.user_model
+
+  @webapp2.cached_property
+  def session(self):
+      """Shortcut to access the current session."""
+      return self.session_store.get_session(backend="datastore")
+
+  def render_template(self, view_filename, params=None):
+    if not params:
+      params = {}
+    user = self.user_info
+    params['user'] = user
+    path = os.path.join(os.path.dirname(__file__), 'views', view_filename)
+    self.response.out.write(template.render(path, params))
+
+  def display_message(self, message):
+    """Utility function to display a template with a simple message."""
+    params = {
+      'message': message
+    }
+    self.render_template('message.html', params)
+
+  # this is needed for webapp2 sessions to work
+  def dispatch(self):
+      # Get a session store for this request.
+      self.session_store = sessions.get_store(request=self.request)
+
+      try:
+          # Dispatch the request.
+          webapp2.RequestHandler.dispatch(self)
+      finally:
+          # Save all sessions.
+          self.session_store.save_sessions(self.response)
+
+class MainHandler(BaseHandler):
+  def get(self):
+    self.render_template('home.html')
+
+class SignupHandler(BaseHandler):
+  def get(self):
+    self.render_template('signup.html')
+
+  def post(self):
+    user_name = self.request.get('username')
+    email = self.request.get('email')
+    name = self.request.get('name')
+    password = self.request.get('password')
+    last_name = self.request.get('lastname')
+
+    unique_properties = ['email_address']
+    user_data = self.user_model.create_user(user_name,
+      unique_properties,
+      email_address=email, name=name, password_raw=password,
+      last_name=last_name, verified=False)
+    if not user_data[0]: #user_data is a tuple
+      self.display_message('Unable to create user for email %s because of \
+        duplicate keys %s' % (user_name, user_data[1]))
+      return
+    
+    user = user_data[1]
+    user_id = user.get_id()
+
+    token = self.user_model.create_signup_token(user_id)
+
+    verification_url = self.uri_for('verification', type='v', user_id=user_id,
+      signup_token=token, _full=True)
+
+    msg = 'Send an email to user in order to verify their address. \
+          They will be able to do so by visiting <a href="{url}">{url}</a>'
+
+    self.display_message(msg.format(url=verification_url))
+
+class ForgotPasswordHandler(BaseHandler):
+  def get(self):
+    self._serve_page()
+
+  def post(self):
+    username = self.request.get('username')
+
+    user = self.user_model.get_by_auth_id(username)
+    if not user:
+      logging.info('Could not find any user entry for username %s', username)
+      self._serve_page(not_found=True)
+      return
+
+    user_id = user.get_id()
+    token = self.user_model.create_signup_token(user_id)
+
+    verification_url = self.uri_for('verification', type='p', user_id=user_id,
+      signup_token=token, _full=True)
+
+    msg = 'Send an email to user in order to reset their password. \
+          They will be able to do so by visiting <a href="{url}">{url}</a>'
+
+    self.display_message(msg.format(url=verification_url))
+  
+  def _serve_page(self, not_found=False):
+    username = self.request.get('username')
+    params = {
+      'username': username,
+      'not_found': not_found
+    }
+    self.render_template('forgot.html', params)
+
+
+class VerificationHandler(BaseHandler):
+  def get(self, *args, **kwargs):
+    user = None
+    user_id = kwargs['user_id']
+    signup_token = kwargs['signup_token']
+    verification_type = kwargs['type']
+
+    # it should be something more concise like
+    # self.auth.get_user_by_token(user_id, signup_token
+    # unfortunately the auth interface does not (yet) allow to manipulate
+    # signup tokens concisely
+    user, ts = self.user_model.get_by_auth_token(int(user_id), signup_token,
+      'signup')
+
+    if not user:
+      logging.info('Could not find any user with id "%s" signup token "%s"',
+        user_id, signup_token)
+      self.abort(404)
+    
+    # store user data in the session
+    self.auth.set_session(self.auth.store.user_to_dict(user), remember=True)
+
+    if verification_type == 'v':
+      # remove signup token, we don't want users to come back with an old link
+      self.user_model.delete_signup_token(user.get_id(), signup_token)
+
+      if not user.verified:
+        user.verified = True
+        user.put()
+
+      self.display_message('User email address has been verified.')
+      return
+    elif verification_type == 'p':
+      # supply user to the page
+      params = {
+        'user': user,
+        'token': signup_token
+      }
+      self.render_template('resetpassword.html', params)
+    else:
+      logging.info('verification type not supported')
+      self.abort(404)
+
+class SetPasswordHandler(BaseHandler):
+
+  @user_required
+  def post(self):
+    password = self.request.get('password')
+    old_token = self.request.get('t')
+
+    if not password or password != self.request.get('confirm_password'):
+      self.display_message('passwords do not match')
+      return
+
+    user = self.user
+    user.set_password(password)
+    user.put()
+
+    # remove signup token, we don't want users to come back with an old link
+    self.user_model.delete_signup_token(user.get_id(), old_token)
+    
+    self.display_message('Password updated')
+
+class LoginHandler(BaseHandler):
+  def get(self):
+    self._serve_page()
+
+  def post(self):
+    username = self.request.get('username')
+    password = self.request.get('password')
+    try:
+      u = self.auth.get_user_by_password(username, password, remember=True,
+        save_session=True)
+      self.redirect(self.uri_for('home'))
+    except (InvalidAuthIdError, InvalidPasswordError) as e:
+      logging.info('Login failed for user %s because of %s', username, type(e))
+      self._serve_page(True)
+
+  def _serve_page(self, failed=False):
+    username = self.request.get('username')
+    params = {
+      'username': username,
+      'failed': failed
+    }
+    self.render_template('login.html', params)
+
+class LogoutHandler(BaseHandler):
+  def get(self):
+    self.auth.unset_session()
+    self.redirect(self.uri_for('home'))
+
+class AuthenticatedHandler(BaseHandler):
+  @user_required
+  def get(self):
+    self.render_template('authenticated.html')
+
+config = {
+  'webapp2_extras.auth': {
+    'user_model': 'model.NetIdentity',
+    'user_attributes': ['name', 'auth_ids']
+  },
+  'webapp2_extras.sessions': {
+    'secret_key': 'Que despierte la Red'
+  }
+}
+
+
 InitializeOpenId()
+
 app = webapp2.WSGIApplication([
-  ('/', FrontPage),
-  ('/server', Login),
-  ('/login', FinishLogin),
-  ('/xrds', XRDS),
-  ('/[^/]*', UserXRDS),
-], debug=False)
+    webapp2.Route('/', MainHandler, name='home'),
+    webapp2.Route('/signup', SignupHandler),
+    webapp2.Route('/<type:v|p>/<user_id:\d+>-<signup_token:.+>',
+      handler=VerificationHandler, name='verification'),
+    webapp2.Route('/password', SetPasswordHandler),
+    webapp2.Route('/pre_login', LoginHandler, name='login'),
+    webapp2.Route('/pre_logout', LogoutHandler, name='logout'),
+    webapp2.Route('/forgot', ForgotPasswordHandler, name='forgot'),
+    webapp2.Route('/authenticated', AuthenticatedHandler, name='authenticated'),
+    webapp2.Route('/server', OpenIDServerHandler),
+    webapp2.Route('/login', FinishLogin),
+    webapp2.Route('/xrds', XRDS),
+    webapp2.Route('/frontend', FrontPage),
+    webapp2.Route('/[^/]*', UserXRDS),
+], debug=True, config=config)
 
